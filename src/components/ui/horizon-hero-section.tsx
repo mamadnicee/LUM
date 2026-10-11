@@ -17,6 +17,7 @@ interface ThreeRefs {
   stars: THREE.Points[];
   nebula: THREE.Mesh | null;
   mountains: THREE.Mesh[];
+  atmosphere: THREE.Mesh | null;
   animationId: number | null;
   targetCameraX: number;
   targetCameraY: number;
@@ -58,6 +59,7 @@ export const Component = () => {
     stars: [],
     nebula: null,
     mountains: [],
+    atmosphere: null,
     animationId: null,
     targetCameraX: 0,
     targetCameraY: 30,
@@ -68,8 +70,9 @@ export const Component = () => {
   useEffect(() => {
     const createStarField = () => {
       const refs = threeRefs.current;
+      const scene = refs.scene;
 
-      if (!refs.scene) return;
+      if (!scene) return;
 
       const starCount = 5000;
 
@@ -173,15 +176,16 @@ export const Component = () => {
 
         const stars = new THREE.Points(geometry, material);
 
-        refs.scene.add(stars);
+        scene.add(stars);
         refs.stars.push(stars);
       }
     };
 
     const createNebula = () => {
       const refs = threeRefs.current;
+      const scene = refs.scene;
 
-      if (!refs.scene) return;
+      if (!scene) return;
 
       const geometry = new THREE.PlaneGeometry(
         8000,
@@ -261,14 +265,15 @@ export const Component = () => {
 
       nebula.position.z = -1050;
 
-      refs.scene.add(nebula);
+      scene.add(nebula);
       refs.nebula = nebula;
     };
 
     const createMountains = () => {
       const refs = threeRefs.current;
+      const scene = refs.scene;
 
-      if (!refs.scene) return;
+      if (!scene) return;
 
       const layers = [
         { distance: -50, height: 60, color: 0x1a1a2e, opacity: 1 },
@@ -315,15 +320,16 @@ export const Component = () => {
           index,
         };
 
-        refs.scene.add(mountain);
+        scene.add(mountain);
         refs.mountains.push(mountain);
       });
     };
 
     const createAtmosphere = () => {
       const refs = threeRefs.current;
+      const scene = refs.scene;
 
-      if (!refs.scene) return;
+      if (!scene) return;
 
       const geometry = new THREE.SphereGeometry(600, 32, 32);
 
@@ -373,7 +379,9 @@ export const Component = () => {
         transparent: true,
       });
 
-      refs.scene.add(new THREE.Mesh(geometry, material));
+      const atmosphere = new THREE.Mesh(geometry, material);
+      scene.add(atmosphere);
+      refs.atmosphere = atmosphere;
     };
 
     const getLocation = () => {
@@ -450,25 +458,29 @@ export const Component = () => {
 
     const initThree = () => {
       const refs = threeRefs.current;
-
-      refs.scene = new THREE.Scene();
-      refs.scene.fog = new THREE.FogExp2(0x000000, 0.00025);
-
-      refs.camera = new THREE.PerspectiveCamera(
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(
         75,
         window.innerWidth / window.innerHeight,
         0.1,
         2000,
       );
 
-      refs.camera.position.set(0, 20, 100);
+      refs.scene = scene;
+      refs.camera = camera;
+      scene.fog = new THREE.FogExp2(0x000000, 0.00025);
+      camera.position.set(0, 20, 100);
 
-      if (!canvasRef.current || !refs.scene || !refs.camera) {
+      const canvas = canvasRef.current;
+
+      if (!canvas) {
+        refs.scene = null;
+        refs.camera = null;
         return;
       }
 
       refs.renderer = new THREE.WebGLRenderer({
-        canvas: canvasRef.current,
+        canvas,
         antialias: true,
         alpha: true,
       });
@@ -487,10 +499,7 @@ export const Component = () => {
 
       refs.composer = new EffectComposer(refs.renderer);
 
-      const renderPass = new RenderPass(
-        refs.scene,
-        refs.camera,
-      );
+      const renderPass = new RenderPass(scene, camera);
 
       refs.composer.addPass(renderPass);
 
@@ -547,40 +556,56 @@ export const Component = () => {
 
     window.addEventListener('resize', handleResize);
 
+    const disposeMaterial = (material: THREE.Material | THREE.Material[]) => {
+      if (Array.isArray(material)) {
+        material.forEach((item) => item.dispose());
+      } else {
+        material.dispose();
+      }
+    };
+
     return () => {
       const refs = threeRefs.current;
 
       if (refs.animationId !== null) {
         cancelAnimationFrame(refs.animationId);
+        refs.animationId = null;
       }
 
       window.removeEventListener('resize', handleResize);
 
       refs.stars.forEach((star) => {
         star.geometry.dispose();
-
-        (star.material as THREE.Material).dispose();
+        disposeMaterial(star.material);
       });
 
       refs.mountains.forEach((mountain) => {
         mountain.geometry.dispose();
-
-        (mountain.material as THREE.Material).dispose();
+        disposeMaterial(mountain.material);
       });
 
       if (refs.nebula) {
         refs.nebula.geometry.dispose();
-
-        (refs.nebula.material as THREE.Material).dispose();
+        disposeMaterial(refs.nebula.material);
       }
 
-      if (refs.renderer) {
-        refs.renderer.dispose();
+      if (refs.atmosphere) {
+        refs.atmosphere.geometry.dispose();
+        disposeMaterial(refs.atmosphere.material);
       }
+
+      refs.composer?.dispose();
+      refs.renderer?.dispose();
 
       refs.stars = [];
       refs.mountains = [];
       refs.nebula = null;
+      refs.atmosphere = null;
+      refs.composer = null;
+      refs.renderer = null;
+      refs.camera = null;
+      refs.scene = null;
+      refs.locations = [];
     };
   }, []);
 
