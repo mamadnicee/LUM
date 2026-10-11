@@ -10,7 +10,6 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 gsap.registerPlugin(ScrollTrigger);
 
 interface ThreeRefs {
-  scene: THREE.Scene | null;
   camera: THREE.PerspectiveCamera | null;
   renderer: THREE.WebGLRenderer | null;
   composer: EffectComposer | null;
@@ -52,7 +51,6 @@ export const Component = () => {
   const totalSections = 2;
 
   const threeRefs = useRef<ThreeRefs>({
-    scene: null,
     camera: null,
     renderer: null,
     composer: null,
@@ -68,15 +66,28 @@ export const Component = () => {
   });
 
   useEffect(() => {
-    const createStarField = () => {
+    const reducedMotion = window.matchMedia(
+      '(prefers-reduced-motion: reduce)',
+    ).matches;
+    const mobileViewport = window.matchMedia('(max-width: 768px)').matches;
+    const touchDevice =
+      'ontouchstart' in window ||
+      (navigator.maxTouchPoints ?? 0) > 0 ||
+      window.matchMedia('(pointer: coarse)').matches;
+    const isMobile = mobileViewport || touchDevice;
+    const performanceSettings = reducedMotion
+      ? { starCount: 500, starLayers: 1, pixelRatioCap: 1, antialias: false, nebulaSegments: 20, fps: 24 }
+      : isMobile
+        ? { starCount: 900, starLayers: 2, pixelRatioCap: 1.25, antialias: false, nebulaSegments: 40, fps: 30 }
+        : { starCount: 5000, starLayers: 3, pixelRatioCap: 1.75, antialias: true, nebulaSegments: 100, fps: 60 };
+    let lastFrameTime = 0;
+    const frameInterval = 1000 / performanceSettings.fps;
+
+    const createStarField = (scene: THREE.Scene) => {
       const refs = threeRefs.current;
-      const scene = refs.scene;
+      const starCount = performanceSettings.starCount;
 
-      if (!scene) return;
-
-      const starCount = 5000;
-
-      for (let i = 0; i < 3; i += 1) {
+      for (let i = 0; i < performanceSettings.starLayers; i += 1) {
         const geometry = new THREE.BufferGeometry();
         const positions = new Float32Array(starCount * 3);
         const colors = new Float32Array(starCount * 3);
@@ -181,17 +192,14 @@ export const Component = () => {
       }
     };
 
-    const createNebula = () => {
+    const createNebula = (scene: THREE.Scene) => {
       const refs = threeRefs.current;
-      const scene = refs.scene;
-
-      if (!scene) return;
-
+      const segments = performanceSettings.nebulaSegments;
       const geometry = new THREE.PlaneGeometry(
         8000,
         4000,
-        100,
-        100,
+        segments,
+        segments,
       );
 
       const material = new THREE.ShaderMaterial({
@@ -269,11 +277,8 @@ export const Component = () => {
       refs.nebula = nebula;
     };
 
-    const createMountains = () => {
+    const createMountains = (scene: THREE.Scene) => {
       const refs = threeRefs.current;
-      const scene = refs.scene;
-
-      if (!scene) return;
 
       const layers = [
         { distance: -50, height: 60, color: 0x1a1a2e, opacity: 1 },
@@ -325,11 +330,8 @@ export const Component = () => {
       });
     };
 
-    const createAtmosphere = () => {
+    const createAtmosphere = (scene: THREE.Scene) => {
       const refs = threeRefs.current;
-      const scene = refs.scene;
-
-      if (!scene) return;
 
       const geometry = new THREE.SphereGeometry(600, 32, 32);
 
@@ -392,12 +394,15 @@ export const Component = () => {
       );
     };
 
-    const animate = () => {
+    const animate = (scene: THREE.Scene, camera: THREE.PerspectiveCamera) => (timestamp: number) => {
       const refs = threeRefs.current;
 
-      refs.animationId = requestAnimationFrame(animate);
+      // Schedule the next frame even when this one is skipped by the FPS cap.
+      refs.animationId = requestAnimationFrame(animate(scene, camera));
+      if (timestamp - lastFrameTime < frameInterval) return;
+      lastFrameTime = timestamp;
 
-      const time = Date.now() * 0.001;
+      const time = timestamp * 0.001;
 
       refs.stars.forEach((starField) => {
         const material =
@@ -453,7 +458,11 @@ export const Component = () => {
           50 + Math.cos(time * 0.15) * parallaxFactor;
       });
 
-      refs.composer?.render();
+      if (refs.composer) {
+        refs.composer.render();
+      } else {
+        refs.renderer?.render(scene, camera);
+      }
     };
 
     const initThree = () => {
@@ -466,7 +475,6 @@ export const Component = () => {
         2000,
       );
 
-      refs.scene = scene;
       refs.camera = camera;
       scene.fog = new THREE.FogExp2(0x000000, 0.00025);
       camera.position.set(0, 20, 100);
@@ -474,14 +482,13 @@ export const Component = () => {
       const canvas = canvasRef.current;
 
       if (!canvas) {
-        refs.scene = null;
         refs.camera = null;
         return;
       }
 
       refs.renderer = new THREE.WebGLRenderer({
         canvas,
-        antialias: true,
+        antialias: performanceSettings.antialias,
         alpha: true,
       });
 
@@ -491,36 +498,31 @@ export const Component = () => {
       );
 
       refs.renderer.setPixelRatio(
-        Math.min(window.devicePixelRatio, 2),
+        Math.min(window.devicePixelRatio || 1, performanceSettings.pixelRatioCap),
       );
 
       refs.renderer.toneMapping = THREE.ACESFilmicToneMapping;
       refs.renderer.toneMappingExposure = 0.5;
 
-      refs.composer = new EffectComposer(refs.renderer);
+      if (!isMobile && !reducedMotion) {
+        refs.composer = new EffectComposer(refs.renderer);
+        refs.composer.addPass(new RenderPass(scene, camera));
+        refs.composer.addPass(
+          new UnrealBloomPass(
+            new THREE.Vector2(window.innerWidth, window.innerHeight),
+            0.8,
+            0.4,
+            0.85,
+          ),
+        );
+      }
 
-      const renderPass = new RenderPass(scene, camera);
-
-      refs.composer.addPass(renderPass);
-
-      const bloomPass = new UnrealBloomPass(
-        new THREE.Vector2(
-          window.innerWidth,
-          window.innerHeight,
-        ),
-        0.8,
-        0.4,
-        0.85,
-      );
-
-      refs.composer.addPass(bloomPass);
-
-      createStarField();
-      createNebula();
-      createMountains();
-      createAtmosphere();
+      createStarField(scene);
+      createNebula(scene);
+      createMountains(scene);
+      createAtmosphere(scene);
       getLocation();
-      animate();
+      refs.animationId = requestAnimationFrame(animate(scene, camera));
 
       setIsReady(true);
     };
@@ -530,11 +532,7 @@ export const Component = () => {
     const handleResize = () => {
       const refs = threeRefs.current;
 
-      if (
-        !refs.camera ||
-        !refs.renderer ||
-        !refs.composer
-      ) {
+      if (!refs.camera || !refs.renderer) {
         return;
       }
 
@@ -543,15 +541,11 @@ export const Component = () => {
 
       refs.camera.updateProjectionMatrix();
 
-      refs.renderer.setSize(
-        window.innerWidth,
-        window.innerHeight,
+      refs.renderer.setPixelRatio(
+        Math.min(window.devicePixelRatio || 1, performanceSettings.pixelRatioCap),
       );
-
-      refs.composer.setSize(
-        window.innerWidth,
-        window.innerHeight,
-      );
+      refs.renderer.setSize(window.innerWidth, window.innerHeight);
+      refs.composer?.setSize(window.innerWidth, window.innerHeight);
     };
 
     window.addEventListener('resize', handleResize);
@@ -604,7 +598,6 @@ export const Component = () => {
       refs.composer = null;
       refs.renderer = null;
       refs.camera = null;
-      refs.scene = null;
       refs.locations = [];
     };
   }, []);
@@ -688,6 +681,12 @@ export const Component = () => {
   }, [isReady]);
 
   useEffect(() => {
+    const isTouchScrollDevice = () =>
+      window.matchMedia('(max-width: 768px)').matches ||
+      'ontouchstart' in window ||
+      (navigator.maxTouchPoints ?? 0) > 0 ||
+      window.matchMedia('(pointer: coarse)').matches;
+
     const handleScroll = () => {
       const scrollY = window.scrollY;
       const windowHeight = window.innerHeight;
@@ -704,14 +703,18 @@ export const Component = () => {
         1,
       );
 
-      setScrollProgress(progress);
+      setScrollProgress((previous) =>
+        Math.abs(previous - progress) > 0.001 ? progress : previous,
+      );
 
       const sectionIndex = Math.min(
         Math.floor(progress * totalSections),
         totalSections - 1,
       );
 
-      setCurrentSection(sectionIndex + 1);
+      setCurrentSection((previous) =>
+        previous !== sectionIndex + 1 ? sectionIndex + 1 : previous,
+      );
 
       const refs = threeRefs.current;
       const totalProgress = progress * totalSections;
@@ -760,7 +763,10 @@ export const Component = () => {
       }
     };
 
-    window.addEventListener('scroll', handleScroll);
+    const scrollOptions: AddEventListenerOptions | boolean = isTouchScrollDevice()
+      ? { passive: true }
+      : false;
+    window.addEventListener('scroll', handleScroll, scrollOptions);
     handleScroll();
 
     return () => {
